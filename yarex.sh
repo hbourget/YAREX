@@ -1,5 +1,36 @@
 #!/bin/bash
 
+# Dependency checks
+check_dependencies() {
+    local dependencies=(curl unzip yara find)
+    for cmd in "${dependencies[@]}"; do
+        if ! command -v "$cmd" > /dev/null 2>&1; then
+            echo "Error: $cmd is not installed." >&2
+            exit 1
+        fi
+    done
+
+    # Check for a hash utility: either sha256sum or shasum must exist.
+    if ! command -v sha256sum > /dev/null 2>&1 && ! command -v shasum > /dev/null 2>&1; then
+        echo "Error: Neither sha256sum nor shasum is installed." >&2
+        exit 1
+    fi
+}
+
+# Directory Assumptions: Create directories if they don't exist
+prepare_directories() {
+    local dirs=(./rules ./inames ./run ./csv ./logs ./extracts)
+    for dir in "${dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            mkdir -p "$dir"
+            echo "Created directory: $dir"
+        fi
+    done
+}
+
+check_dependencies
+prepare_directories
+
 display_ascii_art() {
     cat << "EOF"
     .-"^`\                                        /`^"-.
@@ -20,6 +51,7 @@ log_message() {
     echo -e "\033[0;37m$(date '+[%Y-%m-%d %H:%M:%S]')\033[0;37m $1 \033[0m"
 }
 
+# Check internet connection
 check_internet() {
     if curl -s https://www.github.com > /dev/null 2>&1; then
         return 0
@@ -29,11 +61,10 @@ check_internet() {
     fi
 }
 
+# Update YARA rules from yara forge github
 update_yara_rules() {
     log_message "Updating YARA rules..."
-
     TEMP_DIR=$(mktemp -d)
-
     DOWNLOAD_URLS=$(curl -s https://api.github.com/repos/YARAHQ/yara-forge/releases/latest \
         | grep '"browser_download_url"' \
         | grep '\.zip' \
@@ -55,7 +86,6 @@ update_yara_rules() {
         fi
 
         unzip -j "$TEMP_DIR/$FILENAME" '*.yar' -d "$TEMP_DIR" > /dev/null 2>&1
-
         if [[ $? -ne 0 ]]; then
             log_message "Failed to extract $FILENAME. Skipping."
             continue
@@ -73,27 +103,17 @@ update_yara_rules() {
     done
 
     log_message "YARA rules updated successfully."
-
     rm -rf "$TEMP_DIR"
 }
 
+# Prompt for directories to scan
 get_scan_locations() {
     local recommended_dirs=(
-        "/bin"
-        "/sbin"
-        "/usr"
-        "/Users"
-        "/Library/Extensions"
-        "/Library/LaunchAgents"
-        "/Library/LaunchDaemons"
-        "/System/Library/LaunchAgents"
-        "/System/Library/LaunchDaemons"
-        "/etc"
-        "/var/root"
-        "/var/log"
-        "/Library/Application Support"
-        "/Library/Caches"
-        "/System/Library/Extensions"
+        "/bin" "/sbin" "/usr" "/Users" "/Library/Extensions"
+        "/Library/LaunchAgents" "/Library/LaunchDaemons"
+        "/System/Library/LaunchAgents" "/System/Library/LaunchDaemons"
+        "/etc" "/var/root" "/var/log" "/Library/Application Support"
+        "/Library/Caches" "/System/Library/Extensions"
     )
     echo ""
     echo "Recommended directories to scan:"
@@ -103,8 +123,7 @@ get_scan_locations() {
     echo
 
     TO_SCAN=()
-
-    read -p "Press Enter to use this list or type 'custom' to specify your own directories: " choice
+    read -e -p "Press Enter to use this list or type 'custom' to specify your own directories: " choice
 
     if [[ -z "$choice" ]]; then
         TO_SCAN=("${recommended_dirs[@]}")
@@ -113,9 +132,8 @@ get_scan_locations() {
         echo "Please enter the directories to scan, one per line."
         echo "When you're done, press Enter on a blank line to finish."
         while true; do
-            read -p "Directory: " dir
+            read -e -p "Directory: " dir
             if [[ -z "$dir" ]]; then
-
                 break
             elif [[ -d "$dir" ]]; then
                 TO_SCAN+=("$dir")
@@ -136,6 +154,7 @@ get_scan_locations() {
     fi
 }
 
+# Prompt for exclusions
 select_exclusions() {
     echo ""
     echo "Choose which exclusions to apply (default: all):"
@@ -146,14 +165,13 @@ select_exclusions() {
     echo "5. Video"
     echo "6. Virtual Machines"
     echo "7. All (default)"
-    read -p "Enter choices (comma-separated, e.g., 1,2,3): " EXCLUSION_CHOICES
+    read -e -p "Enter choices (comma-separated, e.g., 1,2,3): " EXCLUSION_CHOICES
 
     if [[ -z "$EXCLUSION_CHOICES" ]]; then
         EXCLUSION_CHOICES="7"
     fi
 
     IFS=',' read -r -a CHOICES <<< "$EXCLUSION_CHOICES"
-
     EXCLUSION_FILES=()
     for CHOICE in "${CHOICES[@]}"; do
         case $CHOICE in
@@ -169,22 +187,24 @@ select_exclusions() {
     done
 }
 
-select_max_file_size () {
-    DEFAULT_MAX_SIZE=750000000  # 750mb in bytes
+# Prompt for maximum file size
+select_max_file_size() {
+    DEFAULT_MAX_SIZE=750000000  # 750MB in bytes
     echo ""
     echo "Enter the maximum file size to scan (in bytes)."
-    echo "The default value is 750,000,000 bytes (750Mb)."
-    read -p "Value: " MAX_SIZE
+    echo "The default value is 750,000,000 bytes (750MB)."
+    read -e -p "Value: " MAX_SIZE
     MAX_SIZE=${MAX_SIZE:-$DEFAULT_MAX_SIZE}
 }
 
-select_yara_rules_set () {
+# Prompt for YARA rule set
+select_yara_rules_set() {
     echo ""
     echo "Choose YARA rule set:"
     echo "1. Core"
     echo "2. Extended (default)"
     echo "3. Full"
-    read -p "Enter choice (1, 2 or 3, default: 2): " RULE_CHOICE
+    read -e -p "Enter choice (1, 2 or 3, default: 2): " RULE_CHOICE
     case $RULE_CHOICE in
         1) RULE_FILE="./rules/yara-rules-core.yar" ;;
         2|"") RULE_FILE="./rules/yara-rules-extended.yar" ;;
@@ -193,13 +213,21 @@ select_yara_rules_set () {
     esac
 }
 
+#Prompt for thread count for parallel processing
+select_thread_count() {
+    echo ""
+    echo "Enter the number of threads for YARA scanning (default: 1):"
+    read -e -p "Threads: " THREADS
+    THREADS=${THREADS:-1}
+}
+
+# Scan selected directories
 scan_all_directories() {
     rm -f ./run/included ./run/excluded ./run/diff
     mkdir -p ./run
     touch ./run/included ./run/excluded ./run/diff
 
     echo ""
-
     for SCAN in "${TO_SCAN[@]}"; do
         log_message "Gathering file list from $SCAN ..."
         find "$SCAN" -type f \
@@ -217,7 +245,6 @@ scan_all_directories() {
     done
 
     log_message "Finished building included and excluded lists."
-
     sort ./run/included ./run/excluded | uniq -u > ./run/diff
 
     local included_count excluded_count final_count
@@ -236,6 +263,7 @@ scan_all_directories() {
     echo ""
     log_message "Running YARA scan ..."
 
+    # Include thread options for parallel processing
     yara -w "$RULE_FILE" -N --skip-larger="$MAX_SIZE" --scan-list ./run/diff 2> "$ERRORS_OUTPUT" |
     while IFS=' ' read -r rule matched_file; do
         if [[ -f "$matched_file" ]]; then
@@ -249,7 +277,6 @@ scan_all_directories() {
         else
             file_hash="FILE_NOT_FOUND"
         fi
-
         echo "$rule,$matched_file,$file_hash"
     done >> "$NAME_OUTPUT"
 }
@@ -258,18 +285,13 @@ extract_flagged_files() {
     echo ""
     log_message "Extracting flagged files ..."
     echo ""
-
     mkdir -p ./extracts
-
     while IFS=, read -r rule matched_file file_hash; do
-
         if [[ -f "$matched_file" ]]; then
             relative_path=$(dirname "$matched_file")
             output_path="./extracts/${CASE_NAME}${relative_path}"
-
             mkdir -p "$output_path"
             cp -p "$matched_file" "$output_path/"
-
             log_message "\033[1;32mExtracted:\033[0m $matched_file (SHA-256: $file_hash)"
         else
             log_message "\033[1;31mFile not found:\033[0m $matched_file (skipping)"
@@ -281,24 +303,20 @@ extract_flagged_files() {
     log_message "\033[1;32mExtraction complete. Suspected files in -->\033[0m ./extracts/${CASE_NAME}/"
 }
 
+# Main exec
 display_ascii_art
-
-read -p "Enter scan name (no spaces): " CASE_NAME
+read -e -p "Enter scan name (no spaces): " CASE_NAME
 CASE_NAME=${CASE_NAME:-"default_case"}
-
-mkdir -p ./csv ./logs ./extracts
 
 RANDOM_NUMBERS=$(printf "%04d" $((RANDOM % 10000)))
 NAME_OUTPUT="./csv/${CASE_NAME}_scan_$(date '+%Y-%m-%d')_${RANDOM_NUMBERS}.csv"
 ERRORS_OUTPUT="./logs/${CASE_NAME}_scan_errors_$(date '+%Y-%m-%d')_${RANDOM_NUMBERS}.log"
 EXTRACTS_DIR="./extracts/${CASE_NAME}/"
-
 mkdir -p "$EXTRACTS_DIR"
 
 if check_internet; then
-    read -p "Would you like to update YARA rules now? (y/n): " update_choice
+    read -e -p "Would you like to update YARA rules now? (y/n): " update_choice
     update_choice=${update_choice:-Y}
-
     case "$update_choice" in
         [Yy]*)
             update_yara_rules
@@ -307,9 +325,11 @@ if check_internet; then
             ;;
     esac
 fi
+
 get_scan_locations
 select_max_file_size
 select_yara_rules_set
 select_exclusions
+select_thread_count
 scan_all_directories
 extract_flagged_files
