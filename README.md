@@ -62,13 +62,6 @@ Refer to the [YARA GitHub repository](https://github.com/VirusTotal/yara) for mo
 
 > You have to convert those values in bytes (binary)! https://www.gbmb.org/mb-to-bytes
 
-### ⚡ Multi threading:
-| **CPU Cores** | **Number of threads** |
-|--------------|--------------------|
-| 2 cores | `2` |
-| 4 cores | `2` or `3` |
-| 8+ cores | `4` to `6` |
-
 ### 🛠 Rule sets
 | **Need** | **Rule set** | **Description** |
 |----------|----------------------|----------------|
