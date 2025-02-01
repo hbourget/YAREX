@@ -1,3 +1,5 @@
+<img src=https://i.imgur.com/3xERQeP.png height=150 width=350>
+
 # YAREX
 ![MIT License](https://img.shields.io/badge/License-MIT-black)
 ![Bash Script](https://img.shields.io/badge/4.0+-Bash-green)
