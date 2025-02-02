@@ -213,14 +213,6 @@ select_yara_rules_set() {
     esac
 }
 
-#Prompt for thread count for parallel processing
-select_thread_count() {
-    echo ""
-    echo "Enter the number of threads for YARA scanning (default: 1):"
-    read -e -p "Threads: " THREADS
-    THREADS=${THREADS:-1}
-}
-
 # Scan selected directories
 scan_all_directories() {
     rm -f ./run/included ./run/excluded ./run/diff
@@ -330,6 +322,14 @@ get_scan_locations
 select_max_file_size
 select_yara_rules_set
 select_exclusions
-select_thread_count
 scan_all_directories
-extract_flagged_files
+
+read -e -p "Would you like to extract the flagged files? (y/n): " extract_choice
+extract_choice=${extract_choice:-Y}
+case "extract_choice" in
+    [Yy]*)
+        extract_flagged_files
+        ;;
+    *)
+        ;;
+esac

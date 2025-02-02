@@ -408,4 +408,11 @@ Scan-AllDirectories -ScanLocations $toScan `
                     -ErrorFile $errorFile `
                     -CsvOutput $csvOutput
 
-Extract-FlaggedFiles -CsvResults $csvOutput -ExtractsDir $extractsDir
+
+
+$updateChoice = Read-Host "Would you like to extract flagged files? (y/n)"
+    if ($updateChoice -match "^(Y|y|)$") {
+        Extract-FlaggedFiles -CsvResults $csvOutput -ExtractsDir $extractsDir
+    } else {
+        Log-Message "Not extracting files."
+    }
