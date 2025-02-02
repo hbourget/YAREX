@@ -87,7 +87,7 @@ Exclusions are managed via `.inm` files located in the `./inames` directory. The
 
 ## Usage
 
-### GNU/Linux :
+### GNU/Linux & macOS :
 Run the YAREX script with privileges:
 
 ```bash
