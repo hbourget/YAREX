@@ -6,4 +6,5 @@
 -iname "*.vdi" -o \
 -iname "*.raw" -o \
 -iname "*.img" -o \
+-iname "*.vmwarevm" -o \
 -iname "*.qcow2"
