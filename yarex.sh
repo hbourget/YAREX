@@ -255,7 +255,6 @@ scan_all_directories() {
     echo ""
     log_message "Running YARA scan ..."
 
-    # Include thread options for parallel processing
     yara -w "$RULE_FILE" -N --skip-larger="$MAX_SIZE" --scan-list ./run/diff 2> "$ERRORS_OUTPUT" |
     while IFS=' ' read -r rule matched_file; do
         if [[ -f "$matched_file" ]]; then
