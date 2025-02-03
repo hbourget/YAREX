@@ -271,6 +271,7 @@ scan_all_directories() {
         fi
         echo "$rule,$matched_file,$file_hash"
     done >> "$NAME_OUTPUT"
+    log_message "\033[1;32mScan completed. Results in --> \033[0m $NAME_OUTPUT"
 }
 
 extract_flagged_files() {
@@ -291,7 +292,6 @@ extract_flagged_files() {
     done < "$NAME_OUTPUT"
 
     echo ""
-    log_message "\033[1;32mScan completed. Results in --> \033[0m $NAME_OUTPUT"
     log_message "\033[1;32mExtraction complete. Suspected files in -->\033[0m ./extracts/${CASE_NAME}/"
 }
 
@@ -326,7 +326,7 @@ scan_all_directories
 
 read -e -p "Would you like to extract the flagged files? (y/n): " extract_choice
 extract_choice=${extract_choice:-Y}
-case "extract_choice" in
+case "$extract_choice" in
     [Yy]*)
         extract_flagged_files
         ;;
