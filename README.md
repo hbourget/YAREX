@@ -6,7 +6,7 @@
 ![Bash Script](https://img.shields.io/badge/5.1+-Powershell-blue)
 
 
-<b>YAREX</b> was initially created to optimize file-system-wide YARA scans, that are taking ages, on even on higher end machines. It is a user-friendly script designed to simplify those scans, with interactive prompts.
+<b>YAREX</b> was initially to optimize file-system-wide YARA scans, that are taking ages, even on higher end machines. It is a user-friendly script designed to simplify those scans, with interactive prompts.
 
 ## Features
 
