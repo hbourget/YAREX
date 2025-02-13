@@ -223,6 +223,7 @@ scan_all_directories() {
     for SCAN in "${TO_SCAN[@]}"; do
         log_message "Gathering file list from $SCAN ..."
         find "$SCAN" -type f \
+            ! -path "/System/Volumes/Preboot/*" \
             ! -name "yara-rules-core.yar" \
             ! -name "yara-rules-extended.yar" \
             ! -name "yara-rules-full.yar" \
@@ -270,7 +271,12 @@ scan_all_directories() {
         fi
         echo "$rule,$matched_file,$file_hash"
     done >> "$NAME_OUTPUT"
+    echo ""
+    log_message "\033[1;32m############################################"
+    echo ""
     log_message "\033[1;32mScan completed. Results in --> \033[0m $NAME_OUTPUT"
+    echo ""
+    log_message "\033[1;32m############################################"
 }
 
 extract_flagged_files() {
@@ -291,7 +297,11 @@ extract_flagged_files() {
     done < "$NAME_OUTPUT"
 
     echo ""
+    log_message "\033[1;32m############################################"
+    echo ""
     log_message "\033[1;32mExtraction complete. Suspected files in -->\033[0m ./extracts/${CASE_NAME}/"
+    echo ""
+    log_message "\033[1;32m############################################"
 }
 
 # Main exec
