@@ -1,9 +1,0 @@
--iname "*.zip" -o \
--iname "*.rar" -o \
--iname "*.tar" -o \
--iname "*.gz" -o \
--iname "*.7z" -o \
--iname "*.bz2" -o \
--iname "*.xz" -o \
--iname "*.cab" -o \
--iname "*.tgz"

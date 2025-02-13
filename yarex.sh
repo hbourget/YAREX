@@ -19,7 +19,7 @@ check_dependencies() {
 
 # Directory Assumptions: Create directories if they don't exist
 prepare_directories() {
-    local dirs=(./rules ./inames ./run ./csv ./logs ./extracts)
+    local dirs=(./runtime/rules ./runtime/inames ./runtime/run ./results/csv ./results/logs ./results/extracts)
     for dir in "${dirs[@]}"; do
         if [[ ! -d "$dir" ]]; then
             mkdir -p "$dir"
@@ -95,9 +95,9 @@ update_yara_rules() {
     for RULE_FILE in "$TEMP_DIR"/*.yar; do
         BASENAME=$(basename "$RULE_FILE")
         case $BASENAME in
-            yara-rules-core.yar) mv "$RULE_FILE" ./rules/yara-rules-core.yar ;;
-            yara-rules-extended.yar) mv "$RULE_FILE" ./rules/yara-rules-extended.yar ;;
-            yara-rules-full.yar) mv "$RULE_FILE" ./rules/yara-rules-full.yar ;;
+            yara-rules-core.yar) mv "$RULE_FILE" ./runtime/rules/yara-rules-core.yar ;;
+            yara-rules-extended.yar) mv "$RULE_FILE" ./runtime/rules/yara-rules-extended.yar ;;
+            yara-rules-full.yar) mv "$RULE_FILE" ./runtime/rules/yara-rules-full.yar ;;
             *) log_message "Unknown rule file: $BASENAME. Skipping." ;;
         esac
     done
@@ -175,13 +175,13 @@ select_exclusions() {
     EXCLUSION_FILES=()
     for CHOICE in "${CHOICES[@]}"; do
         case $CHOICE in
-            1) EXCLUSION_FILES+=("./inames/archives.inm") ;;
-            2) EXCLUSION_FILES+=("./inames/audio.inm") ;;
-            3) EXCLUSION_FILES+=("./inames/databases.inm") ;;
-            4) EXCLUSION_FILES+=("./inames/images.inm") ;;
-            5) EXCLUSION_FILES+=("./inames/video.inm") ;;
-            6) EXCLUSION_FILES+=("./inames/vm.inm") ;;
-            7) EXCLUSION_FILES=("./inames/archives.inm" "./inames/audio.inm" "./inames/databases.inm" "./inames/images.inm" "./inames/video.inm" "./inames/vm.inm") ;;
+            1) EXCLUSION_FILES+=("./runtime/inames/archives.inm") ;;
+            2) EXCLUSION_FILES+=("./runtime/inames/audio.inm") ;;
+            3) EXCLUSION_FILES+=("./runtime/inames/databases.inm") ;;
+            4) EXCLUSION_FILES+=("./runtime/inames/images.inm") ;;
+            5) EXCLUSION_FILES+=("./runtime/inames/video.inm") ;;
+            6) EXCLUSION_FILES+=("./runtime/inames/vm.inm") ;;
+            7) EXCLUSION_FILES=("./runtime/inames/archives.inm" "./runtime/inames/audio.inm" "./runtime/inames/databases.inm" "./runtime/inames/images.inm" "./runtime/inames/video.inm" "./runtime/inames/vm.inm") ;;
             *) echo "Invalid choice: $CHOICE. Skipping." ;;
         esac
     done
@@ -206,18 +206,18 @@ select_yara_rules_set() {
     echo "3. Full"
     read -e -p "Enter choice (1, 2 or 3, default: 2): " RULE_CHOICE
     case $RULE_CHOICE in
-        1) RULE_FILE="./rules/yara-rules-core.yar" ;;
-        2|"") RULE_FILE="./rules/yara-rules-extended.yar" ;;
-        3) RULE_FILE="./rules/yara-rules-full.yar" ;;
-        *) echo "Invalid choice. Using Extended rules by default."; RULE_FILE="./rules/yara-rules-extended.yar" ;;
+        1) RULE_FILE="./runtime/rules/yara-rules-core.yar" ;;
+        2|"") RULE_FILE="./runtime/rules/yara-rules-extended.yar" ;;
+        3) RULE_FILE="./runtime/rules/yara-rules-full.yar" ;;
+        *) echo "Invalid choice. Using Extended rules by default."; RULE_FILE="./runtime/rules/yara-rules-extended.yar" ;;
     esac
 }
 
 # Scan selected directories
 scan_all_directories() {
-    rm -f ./run/included ./run/excluded ./run/diff
+    rm -f ./runtime/run/included ./runtime/run/excluded ./runtime/run/diff
     mkdir -p ./run
-    touch ./run/included ./run/excluded ./run/diff
+    touch ./runtime/run/included ./runtime/run/excluded ./runtime/run/diff
 
     echo ""
     for SCAN in "${TO_SCAN[@]}"; do
@@ -227,23 +227,26 @@ scan_all_directories() {
             ! -name "yara-rules-core.yar" \
             ! -name "yara-rules-extended.yar" \
             ! -name "yara-rules-full.yar" \
-            >> ./run/included 2>/dev/null
+            ! -name "yara-rules-core.compiled" \
+            ! -name "yara-rules-extended.compiled" \
+            ! -name "yara-rules-full.compiled" \
+            >> ./runtime/run/included 2>/dev/null
 
         for SOURCE in "${EXCLUSION_FILES[@]}"; do
             EXCLUSIONS=$(cat "$SOURCE")
             if [[ -n "$EXCLUSIONS" ]]; then
-                eval "find \"$SCAN\" -type f \\( $EXCLUSIONS \\)" >> ./run/excluded 2>/dev/null
+                eval "find \"$SCAN\" -type f \\( $EXCLUSIONS \\)" >> ./runtime/run/excluded 2>/dev/null
             fi
         done
     done
 
     log_message "Finished building included and excluded lists."
-    sort ./run/included ./run/excluded | uniq -u > ./run/diff
+    sort ./runtime/run/included ./runtime/run/excluded | uniq -u > ./runtime/run/diff
 
     local included_count excluded_count final_count
-    included_count=$(wc -l < ./run/included)
-    excluded_count=$(wc -l < ./run/excluded)
-    final_count=$(wc -l < ./run/diff)
+    included_count=$(wc -l < ./runtime/run/included)
+    excluded_count=$(wc -l < ./runtime/run/excluded)
+    final_count=$(wc -l < ./runtime/run/diff)
     echo ""
     log_message "\033[1;37m############################################"
     echo ""
@@ -256,7 +259,13 @@ scan_all_directories() {
     echo ""
     log_message "Running YARA scan ..."
 
-    yara -w "$RULE_FILE" -N --skip-larger="$MAX_SIZE" --scan-list ./run/diff 2> "$ERRORS_OUTPUT" |
+    if [[ "$RULE_FILE" =~ \.compiled$ ]]; then
+        yara_cmd=(yara -C "$RULE_FILE" -N --skip-larger="$MAX_SIZE" --scan-list ./runtime/run/diff)
+    else
+        yara_cmd=(yara -w "$RULE_FILE" -N --skip-larger="$MAX_SIZE" --scan-list ./runtime/run/diff)
+    fi
+
+    "${yara_cmd[@]}" 2> "$ERRORS_OUTPUT" |
     while IFS=' ' read -r rule matched_file; do
         if [[ -f "$matched_file" ]]; then
             if command -v sha256sum &> /dev/null; then
@@ -283,11 +292,11 @@ extract_flagged_files() {
     echo ""
     log_message "Extracting flagged files ..."
     echo ""
-    mkdir -p ./extracts
+    mkdir -p ./results/extracts
     while IFS=, read -r rule matched_file file_hash; do
         if [[ -f "$matched_file" ]]; then
             relative_path=$(dirname "$matched_file")
-            output_path="./extracts/${CASE_NAME}${relative_path}"
+            output_path="./results/extracts/${CASE_NAME}${relative_path}"
             mkdir -p "$output_path"
             cp -p "$matched_file" "$output_path/"
             log_message "\033[1;32mExtracted:\033[0m $matched_file (SHA-256: $file_hash)"
@@ -299,7 +308,7 @@ extract_flagged_files() {
     echo ""
     log_message "\033[1;32m############################################"
     echo ""
-    log_message "\033[1;32mExtraction complete. Suspected files in -->\033[0m ./extracts/${CASE_NAME}/"
+    log_message "\033[1;32mExtraction complete. Suspected files in -->\033[0m ./results/extracts/${CASE_NAME}/"
     echo ""
     log_message "\033[1;32m############################################"
 }
@@ -310,9 +319,9 @@ read -e -p "Enter scan name (no spaces): " CASE_NAME
 CASE_NAME=${CASE_NAME:-"default_case"}
 
 RANDOM_NUMBERS=$(printf "%04d" $((RANDOM % 10000)))
-NAME_OUTPUT="./csv/${CASE_NAME}_scan_$(date '+%Y-%m-%d')_${RANDOM_NUMBERS}.csv"
-ERRORS_OUTPUT="./logs/${CASE_NAME}_scan_errors_$(date '+%Y-%m-%d')_${RANDOM_NUMBERS}.log"
-EXTRACTS_DIR="./extracts/${CASE_NAME}/"
+NAME_OUTPUT="./results/csv/${CASE_NAME}_scan_$(date '+%Y-%m-%d')_${RANDOM_NUMBERS}.csv"
+ERRORS_OUTPUT="./results/logs/${CASE_NAME}_scan_errors_$(date '+%Y-%m-%d')_${RANDOM_NUMBERS}.log"
+EXTRACTS_DIR="./results/extracts/${CASE_NAME}/"
 mkdir -p "$EXTRACTS_DIR"
 
 if check_internet; then
@@ -330,6 +339,24 @@ fi
 get_scan_locations
 select_max_file_size
 select_yara_rules_set
+
+# Prompt user to compile the selected YARA rules for better performance.
+if command -v yarac >/dev/null 2>&1; then
+    read -e -p "Would you like to compile the selected YARA rules for better performance? (y/n): " compile_choice
+    compile_choice=${compile_choice:-n}
+    if [[ $compile_choice =~ ^[Yy] ]]; then
+        COMPILED_RULE_FILE="${RULE_FILE%.yar}.compiled"
+        if yarac "$RULE_FILE" "$COMPILED_RULE_FILE"; then
+            RULE_FILE="$COMPILED_RULE_FILE"
+            log_message "Successfully compiled YARA rules to $COMPILED_RULE_FILE"
+        else
+            log_message "Compilation failed. Proceeding with uncompiled rules."
+        fi
+    fi
+else
+    log_message "yarac is not installed. Skipping rule compilation."
+fi
+
 select_exclusions
 scan_all_directories
 

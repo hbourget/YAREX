@@ -69,13 +69,13 @@ function Update-YaraRules {
     foreach ($f in $yarFiles) {
         switch ($f.Name) {
             "yara-rules-core.yar" {
-                Move-Item -LiteralPath $f.FullName ".\rules\yara-rules-core.yar" -Force
+                Move-Item -LiteralPath $f.FullName ".\runtime\rules\yara-rules-core.yar" -Force
             }
             "yara-rules-extended.yar" {
-                Move-Item -LiteralPath $f.FullName ".\rules\yara-rules-extended.yar" -Force
+                Move-Item -LiteralPath $f.FullName ".\runtime\rules\yara-rules-extended.yar" -Force
             }
             "yara-rules-full.yar" {
-                Move-Item -LiteralPath $f.FullName ".\rules\yara-rules-full.yar" -Force
+                Move-Item -LiteralPath $f.FullName ".\runtime\rules\yara-rules-full.yar" -Force
             }
             default {
                 Log-Message "Unknown or unexpected rule file: $($f.Name). Skipping."
@@ -158,20 +158,20 @@ function Select-Exclusions {
 
     foreach ($choice in $choiceArray) {
         switch ($choice) {
-            1 { [void]$exclusionFiles.Add(".\inames\archives.inm") }
-            2 { [void]$exclusionFiles.Add(".\inames\audio.inm") }
-            3 { [void]$exclusionFiles.Add(".\inames\databases.inm") }
-            4 { [void]$exclusionFiles.Add(".\inames\images.inm") }
-            5 { [void]$exclusionFiles.Add(".\inames\video.inm") }
-            6 { [void]$exclusionFiles.Add(".\inames\vm.inm") }
+            1 { [void]$exclusionFiles.Add(".\runtime\inames\archives.inm") }
+            2 { [void]$exclusionFiles.Add(".\runtime\inames\audio.inm") }
+            3 { [void]$exclusionFiles.Add(".\runtime\inames\databases.inm") }
+            4 { [void]$exclusionFiles.Add(".\runtime\inames\images.inm") }
+            5 { [void]$exclusionFiles.Add(".\runtime\inames\video.inm") }
+            6 { [void]$exclusionFiles.Add(".\runtime\inames\vm.inm") }
             7 {
                 $exclusionFiles = New-Object System.Collections.ArrayList
-                [void]$exclusionFiles.Add(".\inames\archives.inm")
-                [void]$exclusionFiles.Add(".\inames\audio.inm")
-                [void]$exclusionFiles.Add(".\inames\databases.inm")
-                [void]$exclusionFiles.Add(".\inames\images.inm")
-                [void]$exclusionFiles.Add(".\inames\video.inm")
-                [void]$exclusionFiles.Add(".\inames\vm.inm")
+                [void]$exclusionFiles.Add(".\runtime\inames\archives.inm")
+                [void]$exclusionFiles.Add(".\runtime\inames\audio.inm")
+                [void]$exclusionFiles.Add(".\runtime\inames\databases.inm")
+                [void]$exclusionFiles.Add(".\runtime\inames\images.inm")
+                [void]$exclusionFiles.Add(".\runtime\inames\video.inm")
+                [void]$exclusionFiles.Add(".\runtime\inames\vm.inm")
             }
             8 {
                 $exclusionFiles.Clear()
@@ -206,9 +206,9 @@ function Select-YaraRuleSet {
     $ruleChoice = Read-Host "Enter choice (1/2/3)"
 
     switch ($ruleChoice) {
-        "1" { return ".\rules\yara-rules-core.yar" }
-        "3" { return ".\rules\yara-rules-full.yar" }
-        default { return ".\rules\yara-rules-extended.yar" }
+        "1" { return ".\runtime\rules\yara-rules-core.yar" }
+        "3" { return ".\runtime\rules\yara-rules-full.yar" }
+        default { return ".\runtime\rules\yara-rules-extended.yar" }
     }
 }
 
@@ -222,12 +222,12 @@ function Scan-AllDirectories {
         [string]$CsvOutput
     )
 
-    if (-not (Test-Path ".\run")) {
-        New-Item -ItemType Directory -Path ".\run" | Out-Null
+    if (-not (Test-Path ".\runtime\run")) {
+        New-Item -ItemType Directory -Path ".\runtime\run" | Out-Null
     }
-    $includedFile = ".\run\included"
-    $excludedFile = ".\run\excluded"
-    $diffFile     = ".\run\diff"
+    $includedFile = ".\runtime\run\included"
+    $excludedFile = ".\runtime\run\excluded"
+    $diffFile     = ".\runtime\run\diff"
 
     foreach ($f in @($includedFile, $excludedFile, $diffFile)) {
         if (Test-Path $f) {
@@ -299,7 +299,7 @@ function Scan-AllDirectories {
         "--scan-list",
         $diffFile
     )
-    $yaraOutput = & ".\bin\yara64.exe" $yaraArgs 2> $ErrorFile
+    $yaraOutput = & ".\runtime\bin\yara64.exe" $yaraArgs 2> $ErrorFile
 
     $csvTempOutput = @()
     foreach ($line in $yaraOutput) {
@@ -385,17 +385,17 @@ Display-AsciiArt
 
 $caseName = Prompt-CaseName
 
-if (-not (Test-Path ".\csv"))      { New-Item -ItemType Directory -Path ".\csv"      | Out-Null }
-if (-not (Test-Path ".\logs"))     { New-Item -ItemType Directory -Path ".\logs"     | Out-Null }
-if (-not (Test-Path ".\extracts")) { New-Item -ItemType Directory -Path ".\extracts" | Out-Null }
+if (-not (Test-Path ".\results\csv"))      { New-Item -ItemType Directory -Path ".\results\csv"      | Out-Null }
+if (-not (Test-Path ".\results\logs"))     { New-Item -ItemType Directory -Path ".\results\logs"     | Out-Null }
+if (-not (Test-Path ".\results\extracts")) { New-Item -ItemType Directory -Path ".\results\extracts" | Out-Null }
 
 $randomNumbers = Get-Random -Minimum 0 -Maximum 10000
 $randomNumbers = "{0:D4}" -f $randomNumbers
 $dateStamp     = (Get-Date).ToString("yyyy-MM-dd")
 
-$csvOutput  = ".\csv\$($caseName)_scan_${dateStamp}_$randomNumbers.csv"
-$errorFile  = ".\logs\$($caseName)_scan_errors_${dateStamp}_$randomNumbers.log"
-$extractsDir = ".\extracts\$caseName"
+$csvOutput  = ".\results\csv\$($caseName)_scan_${dateStamp}_$randomNumbers.csv"
+$errorFile  = ".\results\logs\$($caseName)_scan_errors_${dateStamp}_$randomNumbers.log"
+$extractsDir = ".\results\extracts\$caseName"
 
 if (Check-InternetConnectivity) {
     $updateChoice = Read-Host "Would you like to update YARA rules now? (y/n)"
