@@ -216,7 +216,7 @@ select_yara_rules_set() {
 # Scan selected directories
 scan_all_directories() {
     rm -f ./runtime/run/included ./runtime/run/excluded ./runtime/run/diff
-    mkdir -p ./run
+    mkdir -p ./runtime/run
     touch ./runtime/run/included ./runtime/run/excluded ./runtime/run/diff
 
     echo ""
