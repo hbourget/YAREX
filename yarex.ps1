@@ -280,10 +280,14 @@ function Scan-AllDirectories {
     $excludedCount = $excludeList.Count
     $finalCount    = $finalList.Count
     Write-Host "`n############################################`n"
+    Write-Host ""
     Write-Host "Total included files: $includedCount"
     Write-Host "Total excluded files: $excludedCount"
+    Write-Host ""
     Write-Host "Files to be scanned : $finalCount"
+    Write-Host ""
     Write-Host "`n############################################`n"
+    Write-Host ""
 
     Log-Message "Running YARA scan once..."
 
@@ -322,7 +326,11 @@ function Scan-AllDirectories {
     "Rule,File,SHA256" | Out-File -Encoding UTF8 -FilePath $CsvOutput
     $uniqueOutput | Out-File -Append -FilePath $CsvOutput -Encoding UTF8
 
+    Write-Host "`n############################################`n"
+    Write-Host ""
     Log-Message "Scan completed. Results saved in $CsvOutput"
+    Write-Host ""
+    Write-Host "`n############################################`n"
 }
 
 function Extract-FlaggedFiles {
@@ -365,7 +373,11 @@ function Extract-FlaggedFiles {
         }
     }
 
+    Write-Host "`n############################################`n"
+    Write-Host ""
     Log-Message "Extraction complete. Suspected files in $ExtractsDir"
+    Write-Host ""
+    Write-Host "`n############################################`n"
 }
 
 Clear-Host
