@@ -1,4 +1,10 @@
-﻿function Display-AsciiArt {
+﻿# Parse command-line arguments for --extract
+$autoExtract = $false
+if ($args -contains "--extract") {
+    $autoExtract = $true
+}
+
+function Display-AsciiArt {
 @"
     .-"^`\                                        /`^"-.
   .'   ___\                                      /___   `.
@@ -65,7 +71,7 @@ function Update-YaraRules {
         }
     }
 
-    $yarFiles = Get-ChildItem -Path $tempDir -Recurse -Filter "*.yar" 
+    $yarFiles = Get-ChildItem -Path $tempDir -Recurse -Filter "*.yar"
     foreach ($f in $yarFiles) {
         switch ($f.Name) {
             "yara-rules-core.yar" {
@@ -89,7 +95,7 @@ function Update-YaraRules {
 
 function Prompt-CaseName {
     $caseName = Read-Host "Enter scan name (no spaces; e.g., case123)"
-    if ([string]::IsNullOrWhiteSpace($caseName)) { 
+    if ([string]::IsNullOrWhiteSpace($caseName)) {
         $caseName = "default_case"
     }
     return $caseName
@@ -222,6 +228,7 @@ function Scan-AllDirectories {
         [string]$CsvOutput
     )
 
+    # Ensure the run directory exists and clear old files
     if (-not (Test-Path ".\runtime\run")) {
         New-Item -ItemType Directory -Path ".\runtime\run" | Out-Null
     }
@@ -236,22 +243,28 @@ function Scan-AllDirectories {
         New-Item $f -ItemType File | Out-Null
     }
 
-	$includedFilesSet = New-Object System.Collections.Generic.HashSet[string]
+    # Capture the directory where the script is running (to be excluded)
+    $scriptDir = (Get-Location).Path
 
-	foreach ($scanPath in $ScanLocations) {
-		Log-Message "Gathering file list from $scanPath ..."
-		$files = Get-ChildItem -Path $scanPath -Recurse -File -ErrorAction SilentlyContinue |
-			Where-Object {
-				$_.Name -notin @("yara-rules-core.yar","yara-rules-extended.yar","yara-rules-full.yar")
-			} |
-			Select-Object -ExpandProperty FullName
+    $includedFilesSet = New-Object System.Collections.Generic.HashSet[string]
 
-		foreach ($file in $files) {
-			[void]$includedFilesSet.Add($file)
-		}
-	}
+    foreach ($scanPath in $ScanLocations) {
+        Log-Message "Gathering file list from $scanPath ..."
+        $files = Get-ChildItem -Path $scanPath -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -notin @("yara-rules-core.yar","yara-rules-extended.yar","yara-rules-full.yar")
+            } |
+            Select-Object -ExpandProperty FullName
 
-	$includedFilesSet | Out-File -FilePath $includedFile
+        # Exclude files that reside in the current (script) directory.
+        $files = $files | Where-Object { $_ -notlike "$scriptDir\*" }
+
+        foreach ($file in $files) {
+            [void]$includedFilesSet.Add($file)
+        }
+    }
+
+    $includedFilesSet | Out-File -FilePath $includedFile
 
     Log-Message "Finished building included list."
 
@@ -289,7 +302,7 @@ function Scan-AllDirectories {
     Write-Host "`n############################################`n"
     Write-Host ""
 
-    Log-Message "Running YARA scan once..."
+    Log-Message "Running YARA scan..."
 
     $yaraArgs = @(
         "-w",
@@ -303,24 +316,22 @@ function Scan-AllDirectories {
 
     $csvTempOutput = @()
     foreach ($line in $yaraOutput) {
-			if ($line -match "^(\S+)\s+(.*)$") {
-				$ruleName = $Matches[1]
-				$filePath = $Matches[2]
-			}
-
-            if (Test-Path $filePath -PathType Leaf) {
-                try {
-                    $hashObj  = Get-FileHash -Algorithm SHA256 -LiteralPath $filePath -ErrorAction Stop
-                    $fileHash = $hashObj.Hash
-                } catch {
-                    $fileHash = "HASH_ERROR"
-                }
-            } else {
-                $fileHash = "FILE_NOT_FOUND"
-            }
-            $csvTempOutput += "$ruleName,$filePath,$fileHash"
+        if ($line -match "^(\S+)\s+(.*)$") {
+            $ruleName = $Matches[1]
+            $filePath = $Matches[2]
         }
-    
+        if (Test-Path $filePath -PathType Leaf) {
+            try {
+                $hashObj  = Get-FileHash -Algorithm SHA256 -LiteralPath $filePath -ErrorAction Stop
+                $fileHash = $hashObj.Hash
+            } catch {
+                $fileHash = "HASH_ERROR"
+            }
+        } else {
+            $fileHash = "FILE_NOT_FOUND"
+        }
+        $csvTempOutput += "$ruleName,$filePath,$fileHash"
+    }
 
     $uniqueOutput = $csvTempOutput | Sort-Object -Unique
     "Rule,File,SHA256" | Out-File -Encoding UTF8 -FilePath $CsvOutput
@@ -408,9 +419,9 @@ if (Check-InternetConnectivity) {
     Log-Message "Skipping YARA rules update (no internet)."
 }
 
-$toScan        = Prompt-RecommendedDirectories
-$maxSize       = Select-MaxFileSize
-$ruleFile      = Select-YaraRuleSet
+$toScan         = Prompt-RecommendedDirectories
+$maxSize        = Select-MaxFileSize
+$ruleFile       = Select-YaraRuleSet
 $exclusionFiles = Select-Exclusions
 
 Scan-AllDirectories -ScanLocations $toScan `
@@ -420,11 +431,13 @@ Scan-AllDirectories -ScanLocations $toScan `
                     -ErrorFile $errorFile `
                     -CsvOutput $csvOutput
 
-
-
-$updateChoice = Read-Host "Would you like to extract flagged files? (y/n)"
+if ($autoExtract) {
+    Extract-FlaggedFiles -CsvResults $csvOutput -ExtractsDir $extractsDir
+} else {
+    $updateChoice = Read-Host "Would you like to extract flagged files? (y/n)"
     if ($updateChoice -match "^(Y|y|)$") {
         Extract-FlaggedFiles -CsvResults $csvOutput -ExtractsDir $extractsDir
     } else {
         Log-Message "Not extracting files."
     }
+}

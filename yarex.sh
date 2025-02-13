@@ -1,5 +1,19 @@
 #!/bin/bash
 
+# Parse command-line arguments
+AUTO_EXTRACT=false
+for arg in "$@"; do
+    case "$arg" in
+        --extract)
+            AUTO_EXTRACT=true
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
 # Dependency checks
 check_dependencies() {
     local dependencies=(curl unzip yara find)
@@ -213,6 +227,8 @@ select_yara_rules_set() {
     esac
 }
 
+SCRIPT_DIR=$(pwd)
+
 # Scan selected directories
 scan_all_directories() {
     rm -f ./runtime/run/included ./runtime/run/excluded ./runtime/run/diff
@@ -223,6 +239,7 @@ scan_all_directories() {
     for SCAN in "${TO_SCAN[@]}"; do
         log_message "Gathering file list from $SCAN ..."
         find "$SCAN" -type f \
+            ! -path "$SCRIPT_DIR/*" \
             ! -path "/System/Volumes/Preboot/*" \
             ! -name "yara-rules-core.yar" \
             ! -name "yara-rules-extended.yar" \
@@ -342,8 +359,9 @@ select_yara_rules_set
 
 # Prompt user to compile the selected YARA rules for better performance.
 if command -v yarac >/dev/null 2>&1; then
+    echo ""
     read -e -p "Would you like to compile the selected YARA rules for better performance? (y/n): " compile_choice
-    compile_choice=${compile_choice:-n}
+    compile_choice=${compile_choice:-y}
     if [[ $compile_choice =~ ^[Yy] ]]; then
         COMPILED_RULE_FILE="${RULE_FILE%.yar}.compiled"
         if yarac "$RULE_FILE" "$COMPILED_RULE_FILE"; then
@@ -360,12 +378,18 @@ fi
 select_exclusions
 scan_all_directories
 
-read -e -p "Would you like to extract the flagged files? (y/n): " extract_choice
-extract_choice=${extract_choice:-Y}
-case "$extract_choice" in
-    [Yy]*)
-        extract_flagged_files
-        ;;
-    *)
-        ;;
-esac
+# If --extract argument was provided, automatically extract flagged files,
+# otherwise prompt the user.
+if [ "$AUTO_EXTRACT" = true ]; then
+    extract_flagged_files
+else
+    read -e -p "Would you like to extract the flagged files? (y/n): " extract_choice
+    extract_choice=${extract_choice:-Y}
+    case "$extract_choice" in
+        [Yy]*)
+            extract_flagged_files
+            ;;
+        *)
+            ;;
+    esac
+fi
