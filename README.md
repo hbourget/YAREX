@@ -13,11 +13,11 @@
 - **♻️ Automatic rules updates**: Fetches the latest YARA rules from [YARA Forge](https://github.com/YARAHQ/yara-forge).
 - **📁 Locations**: Specify directories to scan.
 - **🚫 Exclusions**: Select specific file types to exclude from scans to make them more efficient.
-- **🔨 Parameters**: Max file size, rule set to use, multi-threading
+- **🔨 Parameters**: Max file size, rule set to use, compile rules
 - **📊 Reporting**: Generates a CSV report with the findings. Rule name / File Path / SHA256 hash
 - **🔍 Extracting**: Extracts the suspected files.
 
-> All of those features are customizable and/or optional.
+> All of those features are customizable and/or optional. You can use the --extract argument to the command to automatically extract files at the end of the scan without prompting the user.
 
 ## Installation
 
