@@ -3,7 +3,7 @@
 # YAREX
 ![MIT License](https://img.shields.io/badge/License-MIT-black)
 ![Bash Script](https://img.shields.io/badge/4.0+-Bash-green)
-![Bash Script](https://img.shields.io/badge/5.1+-Powershell-blue)
+![Powershell Script](https://img.shields.io/badge/5.1+-Powershell-blue)
 
 
 <b>YAREX</b> was created to optimize file-system-wide YARA scans, that are taking ages, even on higher end machines. It is a user-friendly script designed to simplify those scans, with interactive prompts.
