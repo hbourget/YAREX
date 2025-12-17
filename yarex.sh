@@ -235,6 +235,8 @@ scan_all_directories() {
     mkdir -p ./runtime/run
     touch ./runtime/run/included ./runtime/run/excluded ./runtime/run/diff
 
+    echo "Rule,File,SHA256" > "$NAME_OUTPUT"
+
     echo ""
     for SCAN in "${TO_SCAN[@]}"; do
         log_message "Gathering file list from $SCAN ..."
@@ -282,6 +284,12 @@ scan_all_directories() {
         yara_cmd=(yara -w "$RULE_FILE" -N --skip-larger="$MAX_SIZE" --scan-list ./runtime/run/diff)
     fi
 
+    if command -v stdbuf > /dev/null 2>&1; then
+        yara_cmd=(stdbuf -oL -eL "${yara_cmd[@]}")
+    elif command -v gstdbuf > /dev/null 2>&1; then
+        yara_cmd=(gstdbuf -oL -eL "${yara_cmd[@]}")
+    fi
+
     "${yara_cmd[@]}" 2> "$ERRORS_OUTPUT" |
     while IFS=' ' read -r rule matched_file; do
         if [[ -f "$matched_file" ]]; then
@@ -311,6 +319,9 @@ extract_flagged_files() {
     echo ""
     mkdir -p ./results/extracts
     while IFS=, read -r rule matched_file file_hash; do
+        if [[ "$rule" == "Rule" && "$matched_file" == "File" ]]; then
+            continue
+        fi
         if [[ -f "$matched_file" ]]; then
             relative_path=$(dirname "$matched_file")
             output_path="./results/extracts/${CASE_NAME}${relative_path}"

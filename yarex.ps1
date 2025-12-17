@@ -312,30 +312,41 @@ function Scan-AllDirectories {
         "--scan-list",
         $diffFile
     )
-    $yaraOutput = & ".\runtime\bin\yara64.exe" $yaraArgs 2> $ErrorFile
 
-    $csvTempOutput = @()
-    foreach ($line in $yaraOutput) {
-        if ($line -match "^(\S+)\s+(.*)$") {
+    $seen = New-Object "System.Collections.Generic.HashSet[string]"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $writer = New-Object System.IO.StreamWriter($CsvOutput, $false, $utf8NoBom)
+    $writer.AutoFlush = $true
+    $writer.WriteLine("Rule,File,SHA256")
+
+    try {
+        & ".\runtime\bin\yara64.exe" $yaraArgs 2> $ErrorFile | ForEach-Object {
+            $line = $_
+            if ($line -notmatch "^(\S+)\s+(.*)$") {
+                return
+            }
+
             $ruleName = $Matches[1]
             $filePath = $Matches[2]
-        }
-        if (Test-Path $filePath -PathType Leaf) {
-            try {
-                $hashObj  = Get-FileHash -Algorithm SHA256 -LiteralPath $filePath -ErrorAction Stop
-                $fileHash = $hashObj.Hash
-            } catch {
-                $fileHash = "HASH_ERROR"
-            }
-        } else {
-            $fileHash = "FILE_NOT_FOUND"
-        }
-        $csvTempOutput += "$ruleName,$filePath,$fileHash"
-    }
 
-    $uniqueOutput = $csvTempOutput | Sort-Object -Unique
-    "Rule,File,SHA256" | Out-File -Encoding UTF8 -FilePath $CsvOutput
-    $uniqueOutput | Out-File -Append -FilePath $CsvOutput -Encoding UTF8
+            if (Test-Path $filePath -PathType Leaf) {
+                try {
+                    $fileHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $filePath -ErrorAction Stop).Hash
+                } catch {
+                    $fileHash = "HASH_ERROR"
+                }
+            } else {
+                $fileHash = "FILE_NOT_FOUND"
+            }
+
+            $key = "$ruleName`0$filePath"
+            if ($seen.Add($key)) {
+                $writer.WriteLine("$ruleName,$filePath,$fileHash")
+            }
+        }
+    } finally {
+        $writer.Dispose()
+    }
 
     Write-Host "`n############################################`n"
     Write-Host ""
