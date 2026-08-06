@@ -1,0 +1,9 @@
+# Scan artifacts
+results/
+
+# Transient scan state
+runtime/run/
+
+# Rule sets are downloaded from YARA Forge at runtime
+runtime/rules/*.yar
+runtime/rules/*.compiled

@@ -2,7 +2,7 @@
 
 # YAREX
 ![MIT License](https://img.shields.io/badge/License-MIT-black)
-![Bash Script](https://img.shields.io/badge/4.0+-Bash-green)
+![Bash Script](https://img.shields.io/badge/3.2+-Bash-green)
 ![Powershell Script](https://img.shields.io/badge/5.1+-Powershell-blue)
 
 
@@ -17,7 +17,7 @@
 - **📊 Reporting**: Generates a CSV report with the findings. Rule name / File Path / SHA256 hash
 - **🔍 Extracting**: Extracts the suspected files.
 
-> All of those features are customizable and/or optional. You can use the --extract argument to the command to automatically extract files at the end of the scan without prompting the user.
+> All of those features are customizable and/or optional. You can use the --extract argument to the command to automatically extract files at the end of the scan without prompting the user. Use --help to list the available arguments.
 
 ## Installation
 
@@ -45,7 +45,7 @@
    git clone https://github.com/hbourget/yarex.git
    cd yarex
    ```
-> The binary is already included in the project, under the /bin directory.
+> The binary is already included in the project, under the `runtime/bin` directory. If it is missing, YAREX falls back to `yara.exe` on your PATH.
 
 ### Other distros: 
 Refer to the [YARA GitHub repository](https://github.com/VirusTotal/yara) for more installation instructions.
@@ -61,6 +61,9 @@ Refer to the [YARA GitHub repository](https://github.com/VirusTotal/yara) for mo
 | Deep scan (will be very long) | **No limit** (not recommended) |
 
 > You have to convert those values in bytes (binary)! https://www.gbmb.org/mb-to-bytes
+> Digit separators are accepted, so `750,000,000` and `750000000` are equivalent.
+
+The limit is applied while the file list is built, because YARA's own `--skip-larger` option is ignored when it reads a `--scan-list`.
 
 ### 🛠 Rule sets
 | **Need** | **Rule set** | **Description** |
@@ -71,7 +74,7 @@ Refer to the [YARA GitHub repository](https://github.com/VirusTotal/yara) for mo
 
 ### 🚫 Exclusions
 
-Exclusions are managed via `.inm` files located in the `./inames` directory. The goal of this is to remove those types of files from the scan, that can cause bottleneck.
+Exclusions are managed via `.inm` files located in the `./runtime/inames` directory. The goal of this is to remove those types of files from the scan, that can cause bottleneck. Choosing option `8` applies no exclusions at all.
 
 **📦 Archives (archives.inm)** `.zip, .rar, .tar, .gz, .7z, .bz2, .xz, .cab, .tgz`
 

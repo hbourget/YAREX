@@ -1,1 +1,2 @@
-rules/** linguist-vendored
+runtime/rules/** linguist-vendored
+runtime/bin/yara64.exe binary

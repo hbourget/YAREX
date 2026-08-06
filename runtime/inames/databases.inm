@@ -1,0 +1,5 @@
+-iname "*.sql" -o \
+-iname "*.db" -o \
+-iname "*.sqlite" -o \
+-iname "*.sqlite3" -o \
+-iname "*.accdb"
