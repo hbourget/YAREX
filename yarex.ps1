@@ -4,11 +4,13 @@
 
 # Parse command-line arguments
 $autoExtract = $false
+$autoUpdate  = $false
 $showHelp    = $false
 $badArg      = $false
 foreach ($a in $args) {
     switch ($a) {
         "--extract" { $autoExtract = $true }
+        "--auto-update" { $autoUpdate = $true }
         "--help"    { $showHelp = $true }
         "-h"        { $showHelp = $true }
         default {
@@ -26,7 +28,8 @@ YAREX - YARA scans made easy
 Usage: .\yarex.ps1 [OPTIONS]
 
 Options:
-  --extract    Extract flagged files at the end of the scan without prompting.
+  --extract      Extract flagged files at the end of the scan without prompting.
+  --auto-update  Update the rules without asking (rule sets 1-4).
   -h, --help   Show this help and exit.
 
 The script is interactive and will prompt for the scan name, rule set,
@@ -39,6 +42,13 @@ locations, file size limit and exclusions.
 # Always operate relative to the script's own directory, not the caller's cwd.
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }
 Set-Location -LiteralPath $scriptDir
+# Set-Location only changes PowerShell's location. .NET (StreamWriter, File) and
+# native exes (yara) resolve relative paths against the PROCESS directory, which
+# is C:\WINDOWS\system32 in an elevated shell. Align them.
+[Environment]::CurrentDirectory = $scriptDir
+try {
+    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+} catch { }
 
 # Windows PowerShell 5.1 does not negotiate TLS 1.2 by default, which makes
 # every request to GitHub fail on stock installations.
@@ -48,7 +58,7 @@ try {
     # Newer PowerShell versions manage this themselves.
 }
 
-$runDir       = ".\runtime\run"
+$runDir       = Join-Path $scriptDir "runtime\run"
 $includedFile = "$runDir\included"
 $excludedFile = "$runDir\excluded"
 $diffFile     = "$runDir\diff"
@@ -205,6 +215,113 @@ function Update-YaraRules {
     }
 }
 
+# Optional extra rules: a curated subset of Yara-Rules/rules (GPL-2.0, upstream
+# inactive since 2022). Only Windows-relevant malware / maldoc / exploit-kit /
+# CVE / webshell folders are used. Packer, anti-debug, capability and crypto
+# folders are left out on purpose: they flag a large share of clean Windows
+# binaries. Every file is validated with the local yara binary, so rules that
+# need other includes or newer syntax are skipped instead of breaking the scan.
+function Update-CommunityRules {
+    param([string]$YaraExe)
+
+    $target = Join-Path $scriptDir "runtime\rules\yara-rules-community.yar"
+    if (Test-Path -LiteralPath $target -PathType Leaf) {
+        $age = (Get-Date) - (Get-Item -LiteralPath $target).LastWriteTime
+        if ($age.TotalDays -lt 30) {
+            Log-Message "Community rules are $([int]$age.TotalDays) day(s) old; keeping them (upstream rarely changes)."
+            return $true
+        }
+    }
+
+    Log-Message "Updating community rules (Yara-Rules) from GitHub..."
+    $tempDir = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString())
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+    try {
+        $zip = Join-Path $tempDir "rules.zip"
+        try {
+            Invoke-WebRequest -Uri "https://codeload.github.com/Yara-Rules/rules/zip/refs/heads/master" -OutFile $zip -UseBasicParsing -TimeoutSec 180
+            Expand-Archive -LiteralPath $zip -DestinationPath $tempDir -Force -ErrorAction Stop
+        } catch {
+            Log-Message "Failed to download community rules. $_" "Red"
+            return $false
+        }
+
+        $root = Get-ChildItem -LiteralPath $tempDir -Directory | Select-Object -First 1
+        if (-not $root) { Log-Message "Community rules archive was empty." "Red"; return $false }
+
+        $probe = Join-Path $tempDir "probe.txt"
+        $outF  = Join-Path $tempDir "probe.out"
+        $errF  = Join-Path $tempDir "probe.err"
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($probe, "probe", $utf8NoBom)
+
+        $seen    = New-Object System.Collections.Generic.HashSet[string]
+        $parts   = New-Object System.Collections.Generic.List[string]
+        $kept    = 0
+        $skipped = 0
+
+        foreach ($d in @("malware", "maldocs", "exploit_kits", "cve_rules", "webshells")) {
+            $dp = Join-Path $root.FullName $d
+            if (-not (Test-Path -LiteralPath $dp)) { continue }
+            $files = Get-ChildItem -LiteralPath $dp -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -in @(".yar", ".yara") -and $_.Name -notlike "*index*" } |
+                Sort-Object FullName
+            foreach ($f in $files) {
+                $text = [System.IO.File]::ReadAllText($f.FullName)
+                if ($text -match '(?m)^\s*include\s+"') { $skipped++; continue }
+
+                $names = @([regex]::Matches($text, '(?m)^\s*(?:(?:private|global)\s+)*rule\s+(\w+)') | ForEach-Object { $_.Groups[1].Value })
+                if ($names.Count -eq 0) { $skipped++; continue }
+                $dup = $false
+                foreach ($n in $names) { if ($seen.Contains($n)) { $dup = $true; break } }
+                if ($dup) { $skipped++; continue }
+
+                foreach ($x in @($outF, $errF)) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force } }
+                try {
+                    $pr = Start-Process -FilePath $YaraExe -ArgumentList ('-w "{0}" "{1}"' -f $f.FullName, $probe) `
+                              -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outF -RedirectStandardError $errF
+                    $pr.WaitForExit()
+                    $okFile = ($pr.ExitCode -eq 0)
+                } catch { $okFile = $false }
+
+                if ($okFile) {
+                    foreach ($n in $names) { [void]$seen.Add($n) }
+                    $parts.Add($text)
+                    $kept++
+                } else {
+                    $skipped++
+                }
+            }
+        }
+
+        if ($kept -eq 0) {
+            Log-Message "No usable community rule files were found." "Red"
+            return $false
+        }
+
+        # Validate the merged file as a whole before replacing the old one.
+        $merged = Join-Path $tempDir "yara-rules-community.yar"
+        [System.IO.File]::WriteAllText($merged, ($parts -join "`r`n"), $utf8NoBom)
+        foreach ($x in @($outF, $errF)) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force } }
+        $pr = Start-Process -FilePath $YaraExe -ArgumentList ('-w "{0}" "{1}"' -f $merged, $probe) `
+                  -NoNewWindow -Wait -PassThru -RedirectStandardOutput $outF -RedirectStandardError $errF
+        $pr.WaitForExit()
+        if ($pr.ExitCode -ne 0) {
+            Log-Message "Merged community rules failed to compile; keeping previous version if any." "Red"
+            return $false
+        }
+
+        Move-Item -LiteralPath $merged -Destination $target -Force
+        Log-Message "Community rules updated: $kept file(s) / $($seen.Count) rule(s) kept, $skipped skipped." "Green"
+        return $true
+    } finally {
+        if (Test-Path -LiteralPath $tempDir) {
+            Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Prompt-CaseName {
     $caseName = Prompt-Line "Enter scan name (no spaces; e.g., case123)"
     # Keep the name usable as a path component.
@@ -339,11 +456,13 @@ function Select-YaraRuleSet {
     Write-Host "1. Core"
     Write-Host "2. Extended (default)"
     Write-Host "3. Full"
-    $ruleChoice = Prompt-Line "Enter choice (1/2/3)"
+    Write-Host "4. Full + community extras (curated Yara-Rules subset: slower, more false positives)"
+    $ruleChoice = Prompt-Line "Enter choice (1/2/3/4)"
 
     switch ($ruleChoice) {
         "1" { return "core" }
         "3" { return "full" }
+        "4" { return "fullplus" }
         default { return "extended" }
     }
 }
@@ -352,10 +471,53 @@ function Select-YaraRuleSet {
 # Out-File is not used: on Windows PowerShell 5.1 it defaults to UTF-16 and
 # truncates long lines, both of which corrupt the list yara reads.
 function Write-Lines {
-    param([string]$Path, [System.Collections.Generic.IEnumerable[string]]$Lines)
+    param([string]$Path, [System.Collections.Generic.IEnumerable[string]]$Lines, [System.Text.Encoding]$Encoding)
     $full = if ([System.IO.Path]::IsPathRooted($Path)) { $Path } else { Join-Path (Get-Location).Path $Path }
+    if (-not $Encoding) { $Encoding = New-Object System.Text.UTF8Encoding($false) }
+    [System.IO.File]::WriteAllLines($full, $Lines, $Encoding)
+}
+
+# yara64.exe on Windows does not read --scan-list files in a fixed encoding
+# (the bundled 4.5.2 build expects UTF-16; a UTF-8 list is parsed as ONE giant
+# bogus path -> "could not open file" and an instant, empty "clean" scan).
+# Probe which encoding this binary actually understands, using a throwaway
+# rule and target file, before the real scan.
+function Get-ScanListEncoding {
+    param([string]$YaraExe)
+    $dir = Join-Path $runDir "selftest"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllLines($full, $Lines, $utf8NoBom)
+    $target = Join-Path $dir "target.txt"
+    $rule   = Join-Path $dir "selftest.yar"
+    $list   = Join-Path $dir "list.txt"
+    $out    = Join-Path $dir "out.txt"
+    $err    = Join-Path $dir "err.txt"
+    [System.IO.File]::WriteAllText($target, "YAREXSELFTEST", $utf8NoBom)
+    [System.IO.File]::WriteAllText($rule, 'rule yarex_selftest { strings: $a = "YAREXSELFTEST" condition: $a }', $utf8NoBom)
+
+    $candidates = @(
+        (New-Object System.Text.UnicodeEncoding($false, $true)),   # UTF-16LE + BOM
+        (New-Object System.Text.UnicodeEncoding($false, $false)),  # UTF-16LE, no BOM
+        $utf8NoBom,
+        [System.Text.Encoding]::Default                             # ANSI
+    )
+    $found = $null
+    foreach ($enc in $candidates) {
+        [System.IO.File]::WriteAllLines($list, [string[]]@($target), $enc)
+        foreach ($f in @($out, $err)) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } }
+        try {
+            $argStr = '"{0}" -N --scan-list "{1}"' -f $rule, $list
+            $pr = Start-Process -FilePath $YaraExe -ArgumentList $argStr -NoNewWindow -Wait -PassThru `
+                      -RedirectStandardOutput $out -RedirectStandardError $err
+            $pr.WaitForExit()
+        } catch { continue }
+        if ((Test-Path -LiteralPath $out) -and ([System.IO.File]::ReadAllText($out) -match 'yarex_selftest')) {
+            $found = $enc
+            break
+        }
+    }
+    Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    return $found
 }
 
 # Quote a CSV field per RFC 4180 and neutralize spreadsheet formula injection.
@@ -376,6 +538,7 @@ function Scan-AllDirectories {
         [string[]]$ExclusionFiles,
         [long]$MaxSize,
         [string]$RuleFile,
+        [string]$ExtraRuleFile,
         [string]$YaraExe,
         [string]$ErrorFile,
         [string]$CsvOutput
@@ -386,6 +549,14 @@ function Scan-AllDirectories {
     }
     foreach ($f in @($includedFile, $excludedFile, $diffFile, $matchesFile)) {
         if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force }
+    }
+
+    $listEncoding = Get-ScanListEncoding -YaraExe $YaraExe
+    if (-not $listEncoding) {
+        Log-Message "YARA self-test failed: this yara binary could not scan a one-file list. Aborting." "Red"
+        Log-Message "Replace runtime\bin\yara64.exe with an official build (VirusTotal/yara releases) and retry." "Red"
+        $script:ScanOk = $false
+        return
     }
 
     $scriptDirPrefix = (Get-Location).Path.TrimEnd('\') + '\'
@@ -451,7 +622,7 @@ function Scan-AllDirectories {
 
     Write-Lines -Path $includedFile -Lines ([string[]]$includedSet)
     Write-Lines -Path $excludedFile -Lines ([string[]]$excludedSet)
-    Write-Lines -Path $diffFile     -Lines $finalList
+    Write-Lines -Path $diffFile     -Lines $finalList -Encoding $listEncoding
 
     Log-Message "Finished building included and excluded lists."
 
@@ -475,7 +646,15 @@ function Scan-AllDirectories {
     $cores = [Environment]::ProcessorCount
     if ($cores -gt 8) { $yaraArgs.Add("-p"); $yaraArgs.Add("$cores") }
     if ($RuleFile -like "*.compiled") { $yaraArgs.Add("-C") } else { $yaraArgs.Add("-w") }
-    $yaraArgs.Add($RuleFile)
+    if ($ExtraRuleFile) {
+        # Separate namespaces so identically named rules in the two sets cannot
+        # clash. Relative paths avoid any ambiguity with drive-letter colons;
+        # the working directory is the script directory.
+        $yaraArgs.Add("forge:.\runtime\rules\" + (Split-Path -Leaf $RuleFile))
+        $yaraArgs.Add("community:.\runtime\rules\" + (Split-Path -Leaf $ExtraRuleFile))
+    } else {
+        $yaraArgs.Add($RuleFile)
+    }
     $yaraArgs.Add("-N")
     $yaraArgs.Add("--scan-list")
     $yaraArgs.Add((Resolve-Path -LiteralPath $diffFile).Path)
@@ -492,43 +671,78 @@ function Scan-AllDirectories {
     $csvWriter.WriteLine("Rule,File,SHA256")
     $matchCount = 0
 
+    $yaraOut = Join-Path $runDir "yara_stdout"
+    $yaraErr = Join-Path $runDir "yara_stderr"
+    foreach ($f in @($yaraOut, $yaraErr)) {
+        if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force }
+    }
+    # Start-Process joins arguments verbatim, so quote anything with spaces.
+    $quotedArgs = ($yaraArgv | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+    }) -join ' '
+    $yaraExit = -1
+
     try {
-        & $YaraExe $yaraArgv 2>> $ErrorFile | ForEach-Object {
-            $line = $_
-            if ($line -notmatch "^(\S+)\s+(.*)$") {
-                return
-            }
+        try {
+            $proc = Start-Process -FilePath $YaraExe -ArgumentList $quotedArgs -NoNewWindow -Wait -PassThru `
+                        -RedirectStandardOutput $yaraOut -RedirectStandardError $yaraErr
+            $proc.WaitForExit()
+            $yaraExit = [int]$proc.ExitCode
+        } catch {
+            Log-Message "Failed to launch YARA: $_" "Red"
+            Add-Content -LiteralPath $ErrorFile -Value "launch: $_"
+        }
 
-            $ruleName = $Matches[1]
-            $filePath = $Matches[2]
+        if (Test-Path -LiteralPath $yaraErr) {
+            $errText = [System.IO.File]::ReadAllText($yaraErr)
+            if ($errText.Length -gt 0) { [System.IO.File]::AppendAllText($ErrorFile, $errText) }
+        }
 
-            if (Test-Path -LiteralPath $filePath -PathType Leaf) {
-                try {
-                    $fileHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $filePath -ErrorAction Stop).Hash
-                } catch {
-                    $fileHash = "HASH_ERROR"
+        if (Test-Path -LiteralPath $yaraOut) {
+            foreach ($line in [System.IO.File]::ReadLines($yaraOut, [System.Text.Encoding]::UTF8)) {
+                if ($line -notmatch "^(\S+)\s+(.*)$") { continue }
+
+                $ruleName = $Matches[1]
+                $filePath = $Matches[2]
+
+                if (Test-Path -LiteralPath $filePath -PathType Leaf) {
+                    try {
+                        $fileHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $filePath -ErrorAction Stop).Hash
+                    } catch {
+                        $fileHash = "HASH_ERROR"
+                    }
+                } else {
+                    $fileHash = "FILE_NOT_FOUND"
                 }
-            } else {
-                $fileHash = "FILE_NOT_FOUND"
-            }
 
-            $key = "$ruleName`0$filePath"
-            if ($seen.Add($key)) {
-                # Human/spreadsheet facing report.
-                $csvWriter.WriteLine("$(Format-CsvField $ruleName),$(Format-CsvField $filePath),$(Format-CsvField $fileHash)")
-                # Faithful NUL-delimited sidecar used by the extraction step.
-                $matchWriter.Write("$ruleName`0$filePath`0$fileHash`0")
-                $matchCount++
+                $key = "$ruleName`0$filePath"
+                if ($seen.Add($key)) {
+                    $csvWriter.WriteLine("$(Format-CsvField $ruleName),$(Format-CsvField $filePath),$(Format-CsvField $fileHash)")
+                    $matchWriter.Write("$ruleName`0$filePath`0$fileHash`0")
+                    $matchCount++
+                }
             }
         }
-        $yaraExit = $LASTEXITCODE
     } finally {
         $csvWriter.Dispose()
         $matchWriter.Dispose()
     }
 
     Write-Host ""
+    $fatal = $false
     if ($yaraExit -ne 0) {
+        $errLines = @()
+        if (Test-Path -LiteralPath $ErrorFile) { $errLines = @(Get-Content -LiteralPath $ErrorFile -ErrorAction SilentlyContinue) }
+        # Locked/denied files (pagefile, NTUSER.DAT, ...) make yara exit non-zero
+        # but are not a failed scan. Anything else (rule syntax, launch) is fatal.
+        $other = @($errLines | Where-Object { $_ -and $_ -notmatch 'could not open file|^enumeration:' })
+        $ruleHit = @($errLines | Where-Object { $_ -like "*yara-rules-*" })
+        $openErr = @($errLines | Where-Object { $_ -match 'could not open file' })
+        # Fatal: launch failure, rule/compile errors, or most of the list unreadable.
+        $bogus = @($errLines | Where-Object { $_.Length -gt 1000 })   # a whole list parsed as one path
+        $fatal = ($yaraExit -lt 0) -or ($other.Count -gt 0) -or ($ruleHit.Count -gt 0) -or ($bogus.Count -gt 0) -or ($openErr.Count -gt ($finalList.Count / 2))
+    }
+    if ($fatal) {
         $script:ScanOk = $false
         Write-Host "`n############################################`n" -ForegroundColor Red
         Log-Message "YARA exited with status $yaraExit - the scan is INCOMPLETE." "Red"
@@ -539,7 +753,9 @@ function Scan-AllDirectories {
     }
 
     if ((Test-Path -LiteralPath $ErrorFile) -and (Get-Item -LiteralPath $ErrorFile).Length -gt 0) {
-        Log-Message "Errors were logged to $ErrorFile (unreadable files, permissions, ...)" "Yellow"
+        $n = @(Get-Content -LiteralPath $ErrorFile -ErrorAction SilentlyContinue).Count
+        Log-Message "YARA exit code $yaraExit; $n error line(s) logged to $ErrorFile" "Yellow"
+        Get-Content -LiteralPath $ErrorFile -TotalCount 3 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
     }
 
     Write-Host "`n############################################`n" -ForegroundColor Green
@@ -641,19 +857,26 @@ $randomNumbers = Get-Random -Minimum 0 -Maximum 10000
 $randomNumbers = "{0:D4}" -f $randomNumbers
 $dateStamp     = (Get-Date).ToString("yyyy-MM-dd")
 
-$csvOutput   = ".\results\csv\$($caseName)_scan_${dateStamp}_$randomNumbers.csv"
-$errorFile   = ".\results\logs\$($caseName)_scan_errors_${dateStamp}_$randomNumbers.log"
-$extractsDir = ".\results\extracts\$caseName"
+$csvOutput   = Join-Path $scriptDir "results\csv\$($caseName)_scan_${dateStamp}_$randomNumbers.csv"
+$errorFile   = Join-Path $scriptDir "results\logs\$($caseName)_scan_errors_${dateStamp}_$randomNumbers.log"
+$extractsDir = Join-Path $scriptDir "results\extracts\$caseName"
 New-Item -ItemType File -Path $errorFile -Force | Out-Null
 
 # The rule set is chosen first so the update only downloads what is needed.
 $ruleSet  = Select-YaraRuleSet
-$ruleFile = ".\runtime\rules\yara-rules-$ruleSet.yar"
+$useCommunity = $false
+if ($ruleSet -eq "fullplus") { $ruleSet = "full"; $useCommunity = $true }
+$ruleFile = Join-Path $scriptDir "runtime\rules\yara-rules-$ruleSet.yar"
 
 if (Check-InternetConnectivity) {
-    $updateChoice = Prompt-Line "Would you like to update YARA rules now? (y/n)"
+    if ($autoUpdate) {
+        $updateChoice = "y"
+    } else {
+        $updateChoice = Prompt-Line "Would you like to update YARA rules now? (y/n)"
+    }
     if ($updateChoice -match "^(Y|y|)$") {
         Update-YaraRules -RuleSet $ruleSet | Out-Null
+        if ($useCommunity) { Update-CommunityRules -YaraExe $yaraExe | Out-Null }
     } else {
         Log-Message "Skipping YARA rules update at user request."
     }
@@ -668,6 +891,14 @@ if (-not (Test-Path -LiteralPath $ruleFile -PathType Leaf)) {
     exit 1
 }
 
+$communityFile = Join-Path $scriptDir "runtime\rules\yara-rules-community.yar"
+if ($useCommunity -and -not (Test-Path -LiteralPath $communityFile -PathType Leaf)) {
+    Log-Message "Community rules are not available; continuing with the Full set only." "Yellow"
+    $useCommunity = $false
+}
+$extraRule = ""
+if ($useCommunity) { $extraRule = $communityFile }
+
 $toScan         = Prompt-RecommendedDirectories
 $maxSize        = Select-MaxFileSize
 $exclusionFiles = Select-Exclusions
@@ -676,6 +907,7 @@ Scan-AllDirectories -ScanLocations $toScan `
                     -ExclusionFiles $exclusionFiles `
                     -MaxSize $maxSize `
                     -RuleFile $ruleFile `
+                    -ExtraRuleFile $extraRule `
                     -YaraExe $yaraExe `
                     -ErrorFile $errorFile `
                     -CsvOutput $csvOutput
